@@ -31,12 +31,12 @@ if (cluster.isMaster) {
     app.set('view engine', 'ejs');
 
     // Inisialisasi Firebase Admin SDK
-    const serviceAccount = require('./path/to/serviceAccountKey.json');
+// Menggunakan environment variable
+   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
     admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        databaseURL: 'https://kell3-91c40.firebaseio.com'
-    });
-
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: process.env.FIREBASE_DATABASE_URL
+});
     // Middleware untuk verifikasi token
     const verifyToken = async (req, res, next) => {
         try {
