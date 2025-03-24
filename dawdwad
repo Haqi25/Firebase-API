@@ -1,0 +1,229 @@
+const express = require('express');
+const bodyParser = require('body-parser');
+const admin = require('firebase-admin');
+const path = require('path');
+const cookieParser = require('cookie-parser');
+const cluster = require("cluster");
+const os = require("os");
+const redis = require("redis");
+const { promisify } = require("util");
+const mongoose = require('mongoose');
+const Product = require('./models/Product');
+require('dotenv').config();
+
+
+
+
+const numCPUs = os.cpus().length;
+mongoose.connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+  })
+  .then(() => console.log("MongoDB Connected"))
+  .catch(err => console.error("MongoDB Connection Error:", err));
+
+
+
+if (cluster.isMaster) {
+    console.log(`Master ${process.pid} berjalan...`);
+    for (let i = 0; i < numCPUs; i++) {
+        cluster.fork();
+    }
+    cluster.on("exit", (worker) => {
+        console.log(`Worker ${worker.process.pid} berhenti, memulai ulang...`);
+        cluster.fork();
+    });
+} else {
+    // Buat instance Redis
+   // Buat koneksi Redis
+const redisClient = redis.createClient({
+    socket: {
+      host: "127.0.0.1", // Sesuaikan jika menggunakan Redis remote
+      port: 6379, // Default port Redis
+    },
+  });
+  
+  // Tangani error
+  redisClient.on("error", (err) => console.error("Redis Error:", err));
+  
+  (async () => {
+    try {
+      await redisClient.connect();
+      console.log("Redis Connected!");
+    } catch (error) {
+      console.error("Failed to connect to Redis:", error);
+    }
+  })();
+  
+  // Menggunakan Promise bawaan Redis tanpa promisify
+  const getAsync = (key) => redisClient.get(key);
+  const setAsync = (key, value) => redisClient.set(key, value);
+
+    // Inisialisasi Express
+    const app = express();
+    
+    // Middleware
+    app.use(bodyParser.json());
+    app.use(bodyParser.urlencoded({ extended: true }));
+    app.use(cookieParser());
+    app.use(express.static(path.join(__dirname, 'public')));
+    app.set('view engine', 'ejs');
+
+    // Inisialisasi Firebase Admin SDK
+    const serviceAccount = require('./path/to/serviceAccountKey.json');
+
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        databaseURL: "https://kell3-91c40.firebaseio.com"
+    });
+
+     // ✅ Pasang productRoutes setelah `app` didefinisikan
+     const productRoutes = require('./routes/productRoutes');
+     app.use('/products', productRoutes);
+
+    // Middleware untuk verifikasi token
+    const verifyToken = async (req, res, next) => {
+        try {
+            const idToken = req.cookies.session || '';
+
+            if (!idToken) {
+                return res.redirect('/login');
+            }
+
+            const decodedToken = await admin.auth().verifyIdToken(idToken);
+            req.user = decodedToken;
+            next();
+        } catch (error) {
+            console.error('Error verifying token:', error);
+            res.redirect('/login');
+        }
+    };
+
+    // Routes
+    app.get('/', (req, res) => res.render('index'));
+    app.get('/login', (req, res) => res.render('login'));
+    app.get('/register', (req, res) => res.render('register'));
+    app.get('/beranda', verifyToken, async (req, res) => {
+        try {
+            // Ambil data produk dari MongoDB
+            const products = await Product.find();
+            res.render('beranda', { 
+                user: req.user, 
+                products 
+            });
+        } catch (err) {
+            console.error('Error fetching products:', err);
+            res.status(500).send('Terjadi kesalahan pada server');
+        }
+    });
+    // API untuk login
+    app.post('/api/login', async (req, res) => {
+        console.log('Request body:', req.body);
+        try {
+            const idToken = req.body.idToken;
+            if (!idToken) throw new Error('Token tidak ditemukan');
+    
+            const decodedToken = await admin.auth().verifyIdToken(idToken);
+            console.log('Decoded token:', decodedToken);
+    
+            const expiresIn = 60 * 60 * 24 * 5 * 1000; // 5 hari
+            res.cookie('session', idToken, { 
+                maxAge: expiresIn, 
+                httpOnly: true, 
+                secure: process.env.NODE_ENV === 'production' 
+            });
+    
+            res.redirect('/beranda');
+        } catch (error) {
+            console.error('Error login:', error);
+            res.status(401).json({ success: false, message: error.message });
+        }
+    });
+    
+    // API untuk logout
+    app.get('/api/logout', (req, res) => {
+        res.clearCookie('session');
+        res.redirect('/login');
+    });
+
+    // API caching dengan Redis
+    app.get("/api/data", async (req, res) => {
+        try {
+            const cacheData = await getAsync("data");
+            if (cacheData) {
+                console.log("Mengambil dari cache");
+                return res.json(JSON.parse(cacheData));
+            }
+
+            // Simulasi pengolahan data berat
+            const data = { message: "Data diproses dengan cepat!" };
+            await setAsync("data", JSON.stringify(data), "EX", 30); // Cache 30 detik
+            res.json(data);
+        } catch (err) {
+            res.status(500).json({ error: "Terjadi kesalahan" });
+        }
+    });
+
+    // ✅ 1. **GET Semua Barang**
+app.get('/api/products', async (req, res) => {
+    try {
+        const products = await Product.find();
+        res.json(products);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ✅ 2. **GET Barang berdasarkan ID**
+app.get('/api/products/:id', async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        if (!product) return res.status(404).json({ message: "Barang tidak ditemukan" });
+        res.json(product);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ✅ 3. **POST Tambah Barang**
+app.post('/api/products', async (req, res) => {
+    try {
+        const newProduct = new Product(req.body);
+        await newProduct.save();
+        res.status(201).json(newProduct);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// ✅ 4. **PUT Edit Barang**
+app.put('/api/products/:id', async (req, res) => {
+    try {
+        const updatedProduct = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        if (!updatedProduct) return res.status(404).json({ message: "Barang tidak ditemukan" });
+        res.json(updatedProduct);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// ✅ 5. **DELETE Barang**
+app.delete('/api/products/:id', async (req, res) => {
+    try {
+        const deletedProduct = await Product.findByIdAndDelete(req.params.id);
+        if (!deletedProduct) return res.status(404).json({ message: "Barang tidak ditemukan" });
+        res.json({ message: "Barang berhasil dihapus" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+    
+
+    // Start server
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`Worker ${process.pid} berjalan di port ${PORT}`);
+    });
+}
