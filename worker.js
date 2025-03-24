@@ -1,7 +1,7 @@
 const { parentPort } = require("worker_threads");
 
 let total = 0;
-for (let i = 0; i < 1e9; i++) {
+for (let i = 0; i < 1e8; i++) {
     total += i;
 }
 
