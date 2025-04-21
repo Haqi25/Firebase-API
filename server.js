@@ -126,6 +126,9 @@ if (cluster.isMaster && !process.env.WEBSITE_INSTANCE_ID) {
 
   // ✅ Start Server - listen on all interfaces
 
+const PORT = process.env.PORT || 8080;
+
+// ✅ Start Server
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
