@@ -32,17 +32,21 @@ if (cluster.isMaster && !process.env.WEBSITE_INSTANCE_ID) {
   app.set("view engine", "ejs");
 
   // ✅ Inisialisasi Firebase Admin SDK
-  try {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      databaseURL: process.env.FIREBASE_DATABASE_URL,
-    });
-    console.log("🔥 Firebase Admin SDK berhasil diinisialisasi.");
-  } catch (err) {
-    console.error("❌ Gagal menginisialisasi Firebase:", err);
-    process.exit(1); // Hentikan server jika Firebase gagal diinisialisasi
-  }
+try {
+  const serviceAccountBase64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+  const serviceAccountJson = Buffer.from(serviceAccountBase64, "base64").toString("utf-8");
+  const serviceAccount = JSON.parse(serviceAccountJson);
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: process.env.FIREBASE_DATABASE_URL,
+  });
+
+  console.log("🔥 Firebase Admin SDK berhasil diinisialisasi.");
+} catch (err) {
+  console.error("❌ Gagal menginisialisasi Firebase:", err);
+  process.exit(1); // Hentikan server jika Firebase gagal diinisialisasi
+}
 
   // ✅ Middleware untuk verifikasi token
   const verifyToken = async (req, res, next) => {
@@ -127,7 +131,7 @@ if (cluster.isMaster && !process.env.WEBSITE_INSTANCE_ID) {
   
 
 
-// ✅ Start Server
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
